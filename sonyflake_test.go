@@ -10,12 +10,12 @@ import (
 var sf *Sonyflake
 
 var startTime int64
-var machineID uint64
+var machineID uint16
+var shardID uint8
 
 func init() {
 	var st Settings
 	st.StartTime = time.Now()
-
 	sf = NewSonyflake(st)
 	if sf == nil {
 		panic("sonyflake not created")
@@ -24,42 +24,48 @@ func init() {
 	startTime = toSonyflakeTime(st.StartTime)
 
 	ip, _ := lower16BitPrivateIP()
-	machineID = uint64(ip)
+	machineID = ip
+	shardID = 0
 }
 
 func nextID(t *testing.T) uint64 {
 	id, err := sf.NextID()
 	if err != nil {
-		t.Fatal("id not generated")
+		t.Fatal("id not generated", err)
 	}
 	return id
 }
 
 func TestSonyflakeOnce(t *testing.T) {
-	sleepTime := uint64(50)
-	time.Sleep(time.Duration(sleepTime) * 10 * time.Millisecond)
+	sleepTime := int32(5)
+	time.Sleep(time.Duration(sleepTime) * time.Second)
 
 	id := nextID(t)
 	parts := Decompose(id)
 
-	actualMSB := parts["msb"]
+	actualMSB := parts.MSB
 	if actualMSB != 0 {
 		t.Errorf("unexpected msb: %d", actualMSB)
 	}
 
-	actualTime := parts["time"]
+	actualTime := parts.Time
 	if actualTime < sleepTime || actualTime > sleepTime+1 {
 		t.Errorf("unexpected time: %d", actualTime)
 	}
 
-	actualSequence := parts["sequence"]
+	actualSequence := parts.Sequence
 	if actualSequence != 0 {
 		t.Errorf("unexpected sequence: %d", actualSequence)
 	}
 
-	actualMachineID := parts["machine-id"]
+	actualMachineID := parts.MachineID
 	if actualMachineID != machineID {
 		t.Errorf("unexpected machine id: %d", actualMachineID)
+	}
+
+	actualShardID := parts.ShardID
+	if actualShardID != shardID {
+		t.Errorf("unexpected shard id: %d", actualShardID)
 	}
 
 	fmt.Println("sonyflake id:", id)
@@ -77,7 +83,7 @@ func TestSonyflakeFor10Sec(t *testing.T) {
 
 	initial := currentTime()
 	current := initial
-	for current-initial < 1000 {
+	for current-initial < 10 {
 		id := nextID(t)
 		parts := Decompose(id)
 		numID++
@@ -89,23 +95,23 @@ func TestSonyflakeFor10Sec(t *testing.T) {
 
 		current = currentTime()
 
-		actualMSB := parts["msb"]
+		actualMSB := parts.MSB
 		if actualMSB != 0 {
 			t.Errorf("unexpected msb: %d", actualMSB)
 		}
 
-		actualTime := int64(parts["time"])
+		actualTime := int64(parts.Time)
 		overtime := startTime + actualTime - current
 		if overtime > 0 {
 			t.Errorf("unexpected overtime: %d", overtime)
 		}
 
-		actualSequence := parts["sequence"]
+		actualSequence := uint64(parts.Sequence)
 		if maxSequence < actualSequence {
 			maxSequence = actualSequence
 		}
 
-		actualMachineID := parts["machine-id"]
+		actualMachineID := parts.MachineID
 		if actualMachineID != machineID {
 			t.Errorf("unexpected machine id: %d", actualMachineID)
 		}
@@ -125,7 +131,7 @@ func TestSonyflakeInParallel(t *testing.T) {
 
 	consumer := make(chan uint64)
 
-	const numID = 10000
+	const numID = 1000
 	generate := func() {
 		for i := 0; i < numID; i++ {
 			consumer <- nextID(t)
@@ -173,12 +179,12 @@ func TestNilSonyflake(t *testing.T) {
 }
 
 func pseudoSleep(period time.Duration) {
-	sf.startTime -= int64(period) / sonyflakeTimeUnit
+	sf.startTime -= int64(period.Seconds())
 }
 
 func TestNextIDError(t *testing.T) {
 	year := time.Duration(365*24) * time.Hour
-	pseudoSleep(time.Duration(174) * year)
+	pseudoSleep(time.Duration(68) * year)
 	nextID(t)
 
 	pseudoSleep(time.Duration(1) * year)

@@ -15,9 +15,10 @@ import (
 
 // These constants are the bit lengths of Sonyflake ID parts.
 const (
-	BitLenTime      = 39                               // bit length of time
-	BitLenSequence  = 8                                // bit length of sequence number
-	BitLenMachineID = 63 - BitLenTime - BitLenSequence // bit length of machine id
+	BitLenTime      = 31 // bit length of time
+	BitLenSequence  = 8  // bit length of sequence number
+	BitLenShardID   = 8
+	BitLenMachineID = 63 - BitLenTime - BitLenSequence - BitLenShardID // bit length of machine id
 )
 
 // Settings configures Sonyflake:
@@ -37,6 +38,7 @@ const (
 type Settings struct {
 	StartTime      time.Time
 	MachineID      func() (uint16, error)
+	ShardID        func() (uint16, error)
 	CheckMachineID func(uint16) bool
 }
 
@@ -46,7 +48,16 @@ type Sonyflake struct {
 	startTime   int64
 	elapsedTime int64
 	sequence    uint16
+	shardID     uint16
 	machineID   uint16
+}
+type SnoyflakeIDInfo struct {
+	ID        int64
+	Time      int32
+	Sequence  uint8
+	ShardID   uint8
+	MachineID uint16
+	MSB       int64
 }
 
 // NewSonyflake returns a new Sonyflake configured with the given Settings.
@@ -63,17 +74,29 @@ func NewSonyflake(st Settings) *Sonyflake {
 		return nil
 	}
 	if st.StartTime.IsZero() {
-		sf.startTime = toSonyflakeTime(time.Date(2014, 9, 1, 0, 0, 0, 0, time.UTC))
+		sf.startTime = toSonyflakeTime(time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC))
 	} else {
 		sf.startTime = toSonyflakeTime(st.StartTime)
 	}
 
 	var err error
+
+	if st.ShardID == nil {
+		sf.shardID = 0
+	} else {
+		sf.machineID, err = st.ShardID()
+	}
+
+	if err != nil {
+		return nil
+	}
+
 	if st.MachineID == nil {
 		sf.machineID, err = lower16BitPrivateIP()
 	} else {
 		sf.machineID, err = st.MachineID()
 	}
+
 	if err != nil || (st.CheckMachineID != nil && !st.CheckMachineID(sf.machineID)) {
 		return nil
 	}
@@ -97,27 +120,26 @@ func (sf *Sonyflake) NextID() (uint64, error) {
 		sf.sequence = (sf.sequence + 1) & maskSequence
 		if sf.sequence == 0 {
 			sf.elapsedTime++
-			overtime := sf.elapsedTime - current
-			time.Sleep(sleepTime((overtime)))
+			time.Sleep(sleepTime(toGeneralTime(sf.elapsedTime, sf.startTime)))
 		}
 	}
 
 	return sf.toID()
 }
 
-const sonyflakeTimeUnit = 1e7 // nsec, i.e. 10 msec
-
 func toSonyflakeTime(t time.Time) int64 {
-	return t.UTC().UnixNano() / sonyflakeTimeUnit
+	return t.UTC().Unix()
 }
 
 func currentElapsedTime(startTime int64) int64 {
 	return toSonyflakeTime(time.Now()) - startTime
 }
-
-func sleepTime(overtime int64) time.Duration {
-	return time.Duration(overtime)*10*time.Millisecond -
-		time.Duration(time.Now().UTC().UnixNano()%sonyflakeTimeUnit)*time.Nanosecond
+func toGeneralTime(snowflakeTime, startTime int64) time.Time {
+	return time.Unix(snowflakeTime+startTime, 0)
+}
+func sleepTime(elapsedTime time.Time) time.Duration {
+	rt := elapsedTime.Sub(time.Now().UTC())
+	return rt
 }
 
 func (sf *Sonyflake) toID() (uint64, error) {
@@ -125,8 +147,9 @@ func (sf *Sonyflake) toID() (uint64, error) {
 		return 0, errors.New("over the time limit")
 	}
 
-	return uint64(sf.elapsedTime)<<(BitLenSequence+BitLenMachineID) |
-		uint64(sf.sequence)<<BitLenMachineID |
+	return uint64(sf.elapsedTime)<<(BitLenSequence+BitLenMachineID+BitLenShardID) |
+		uint64(sf.sequence)<<(BitLenMachineID+BitLenShardID) |
+		uint64(sf.shardID)<<BitLenShardID |
 		uint64(sf.machineID), nil
 }
 
@@ -165,19 +188,22 @@ func lower16BitPrivateIP() (uint16, error) {
 }
 
 // Decompose returns a set of Sonyflake ID parts.
-func Decompose(id uint64) map[string]uint64 {
-	const maskSequence = uint64((1<<BitLenSequence - 1) << BitLenMachineID)
+func Decompose(id uint64) SnoyflakeIDInfo {
+	const maskSequence = uint64((1<<BitLenSequence - 1) << (BitLenMachineID + BitLenShardID))
+	const maskShardID = uint64(1<<BitLenShardID-1) << BitLenMachineID
 	const maskMachineID = uint64(1<<BitLenMachineID - 1)
 
 	msb := id >> 63
-	time := id >> (BitLenSequence + BitLenMachineID)
-	sequence := id & maskSequence >> BitLenMachineID
+	creationTime := id >> (BitLenSequence + BitLenMachineID + BitLenShardID)
+	sequence := id & maskSequence >> (BitLenMachineID + BitLenShardID)
+	shardID := id & maskShardID >> BitLenMachineID
 	machineID := id & maskMachineID
-	return map[string]uint64{
-		"id":         id,
-		"msb":        msb,
-		"time":       time,
-		"sequence":   sequence,
-		"machine-id": machineID,
+	return SnoyflakeIDInfo{
+		ID:        int64(id),
+		MSB:       int64(msb),
+		Time:      int32(creationTime),
+		Sequence:  uint8(sequence),
+		ShardID:   uint8(shardID),
+		MachineID: uint16(machineID),
 	}
 }
