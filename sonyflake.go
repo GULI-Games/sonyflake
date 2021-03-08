@@ -97,6 +97,10 @@ func NewSonyflake(st Settings) *Sonyflake {
 		sf.machineID, err = st.MachineID()
 	}
 
+	if sf.machineID == 0 {
+		sf.machineID, err = lower16BitPrivateIP()
+	}
+
 	if err != nil || (st.CheckMachineID != nil && !st.CheckMachineID(sf.machineID)) {
 		return nil
 	}
