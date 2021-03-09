@@ -8,6 +8,7 @@ package sonyflake
 
 import (
 	"errors"
+	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -44,12 +45,13 @@ type Settings struct {
 
 // Sonyflake is a distributed unique ID generator.
 type Sonyflake struct {
-	mutex       *sync.Mutex
-	startTime   int64
-	elapsedTime int64
-	sequence    uint16
-	shardID     uint16
-	machineID   uint16
+	mutex          *sync.Mutex
+	startTime      int64
+	elapsedTime    int64
+	sequence       uint16
+	sequenceOffset uint16
+	shardID        uint16
+	machineID      uint16
 }
 type SnoyflakeIDInfo struct {
 	ID        int64
@@ -69,6 +71,7 @@ func NewSonyflake(st Settings) *Sonyflake {
 	sf := new(Sonyflake)
 	sf.mutex = new(sync.Mutex)
 	sf.sequence = uint16(1<<BitLenSequence - 1)
+	sf.sequenceOffset = uint16(rand.Int31n(int32(sf.sequence)))
 
 	if st.StartTime.After(time.Now()) {
 		return nil
@@ -97,6 +100,10 @@ func NewSonyflake(st Settings) *Sonyflake {
 		sf.machineID, err = st.MachineID()
 	}
 
+	if err != nil {
+		return nil
+	}
+
 	if sf.machineID == 0 {
 		sf.machineID, err = lower16BitPrivateIP()
 	}
@@ -119,10 +126,10 @@ func (sf *Sonyflake) NextID() (uint64, error) {
 	current := currentElapsedTime(sf.startTime)
 	if sf.elapsedTime < current {
 		sf.elapsedTime = current
-		sf.sequence = 0
+		sf.sequence = sf.sequenceOffset
 	} else { // sf.elapsedTime >= current
 		sf.sequence = (sf.sequence + 1) & maskSequence
-		if sf.sequence == 0 {
+		if sf.sequence == sf.sequenceOffset {
 			sf.elapsedTime++
 			time.Sleep(sleepTime(toGeneralTime(sf.elapsedTime, sf.startTime)))
 		}

@@ -54,7 +54,7 @@ func TestSonyflakeOnce(t *testing.T) {
 	}
 
 	actualSequence := parts.Sequence
-	if actualSequence != 0 {
+	if actualSequence != uint8(sf.sequenceOffset) {
 		t.Errorf("unexpected sequence: %d", actualSequence)
 	}
 
@@ -75,11 +75,20 @@ func TestSonyflakeOnce(t *testing.T) {
 func currentTime() int64 {
 	return toSonyflakeTime(time.Now())
 }
-
+func contains(s []uint64, e uint64) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
 func TestSonyflakeFor10Sec(t *testing.T) {
 	var numID uint32
-	var lastID uint64
+
 	var maxSequence uint64
+
+	generatedIds := make([]uint64, 0, 2560)
 
 	initial := currentTime()
 	current := initial
@@ -88,10 +97,10 @@ func TestSonyflakeFor10Sec(t *testing.T) {
 		parts := Decompose(id)
 		numID++
 
-		if id <= lastID {
+		if contains(generatedIds, id) {
 			t.Fatal("duplicated id")
 		}
-		lastID = id
+		generatedIds = append(generatedIds, id)
 
 		current = currentTime()
 
